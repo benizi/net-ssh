@@ -1,5 +1,6 @@
 require 'strscan'
 require 'net/ssh/buffer'
+require 'net/ssh/transport/hmac/sha1'
 
 module Net; module SSH
 
@@ -98,8 +99,17 @@ module Net; module SSH
           scanner.skip(/\s*/)
           next if scanner.match?(/$|#/)
 
-          hostlist = scanner.scan(/\S+/).split(/,/)
-          next unless entries.all? { |entry| hostlist.include?(entry) }
+          label = scanner.scan(/\S+/)
+          if label =~ /^\|\d+\|/
+            # HashKnownHosts=yes lines can't match more than one host
+            next if entries.size > 1
+            method, salt, hmac = label.split(/\|/)[1,3]
+            hashed = hashed_host(entries.first, method, salt)
+            next unless hashed == label
+          else
+            hostlist = label.split(/,/)
+            next unless entries.all? { |entry| hostlist.include?(entry) }
+          end
 
           scanner.skip(/\s*/)
           type = scanner.scan(/\S+/)
@@ -125,5 +135,19 @@ module Net; module SSH
       end
     end
 
+    # Find the hashed version of the known_hosts entry for the given host,
+    # method, and salt.  Currently only method '1' is supported.
+    def hashed_host(host, method, salt)
+      hmac =
+        case method
+        when '1'
+          digestor = Net::SSH::Transport::HMAC::SHA1.new
+          digestor.key = salt.unpack('m0').first
+          [digestor.digest(host)].pack('m0')
+        else
+          ' INVALID'
+        end
+      '|%s|%s|%s' % [method, salt, hmac]
+    end
   end
 end; end
